@@ -1,65 +1,60 @@
 # -*- coding: utf-8 -*-
-import re
-
 '''
-The aim of this is to be used in a text editor or IDE plugin that lets you know
-if you and a colleague are introducing conflicting code. "Conflicting code" is
-defined as either:
-    1. A merge conflict, or
-    2. A potential conflict.
-We find a merge conflict using git merge-tree. This tells you if files as of
-the head of your branch will conflict with files in another branch. The
-correspondind git command is
-
-git merge-tree $(git merge-base HEAD branch_other) HEAD branch_other
-
-The find_conflicting_file_paths takes a file containing output from that 
-git command and returns a list of file paths with conflicts in them. 
-
-TODO: Save the conflicting line numbers, and maybe other details about the conflict?
-
-It'd also be nice to specify where the conflict is. To do that I'll need to
-understand merge-tree's cryptic modification notation.
-
-Remaining things to do to get this to a minimally working state:
-    
-    1. Run the merge-tree command from python to feed things to find_conflicting_file_paths.
-        a) Only compare HEAD to recently modified branches.
-    2. Store the file paths in a nicer object which should maybe also have branch info, date etc.
-    3. Write unit tests!
-
-TODO: Use this logic to revive the merge-heaven dashboard as an intermediary
-      step to the Sublime/Atom/IntelliJ/Eclipse plugin?
+TODO
+0. Write unit tests for these methods.
+1. Fetch/update if there hasn't been one in a given period of time (an hr?).
+2. Store data on conflicts in a class that says which branch(es) each file
+   conflict is with.
+3. Turn this into a Sublime plugin.
 '''
 
-FILE_NAME_LINE = re.compile(r'^(\s+)(our|result|their)(\s+)(\d+)\s(\w+)\s(.+)$')
-CONFLICT_LINE = re.compile(r'^\+<<<<<<<\s\.our$')
+from datetime import datetime, timedelta
+from pygit2 import Repository, GIT_BRANCH_REMOTE
 
-def find_conflicting_file_paths(merge_tree_output_file):
-    file_path = ''
-    conflicting_file_paths = []
-    
-    with open(merge_tree_output_file, 'r', encoding='utf8', errors='ignore') as f:
-        for line in f:
-            ## Get the current file name.
-            file_name_match = FILE_NAME_LINE.match(line)
-            if file_name_match:
-                file_path = file_name_match.group(6)
-                continue
-            
-            ## Save the file name if it's a merge conflict line, and then reset
-            ## the file name to blank so that we don't save a file more than once.
-            if file_path:
-                conflict_match = CONFLICT_LINE.match(line)
-                if conflict_match:
-                    conflicting_file_paths.append(file_path)
-                    file_path = ''
-            
-    return conflicting_file_paths
-    
+CUTOFF_TIME_IN_DAYS = 7
+
+class MergeBliss:
+    def __init__(self, path):
+        '''
+        Using the specified path (presumably to a git repository):
+        1. Create a repo from that path.
+        2. Store the repo's current head commit.
+        3. Translate CUTOFF_TIME_IN_DAYS to a fixed datetime.
+        4. Set self.remote_branch_commits to the current set of remote branches.
+        5. Create a blank set of conflicting files.
+        '''
+        self.repo = Repository(path)
+        self.head_commit = self.repo.revparse_single(self.repo.head.target.hex)
+        self.cutoff_time = datetime.today() - timedelta(days = CUTOFF_TIME_IN_DAYS)
+        self.set_remote_branches()
+        self.conflicting_files = set()
+
+    def set_remote_branches(self):
+        '''
+        Set self.remote_branch_commits to a list of the commits tipping all the remote
+        branches, sorted most recently modified first, and excluding those
+        commits that are more than CUTOFF_TIME_IN_DAYS old.
+        '''
+        remote_branch_names = self.repo.listall_branches(GIT_BRANCH_REMOTE)
+        self.remote_branch_commits = [self.repo.revparse_single(branch_name) for branch_name in remote_branch_names]
+        self.remote_branch_commits = [branch for branch in self.remote_branch_commits if branch.commit_time >= self.cutoff_time.timestamp()]
+        self.remote_branch_commits.sort(key=lambda x: x.commit_time, reverse=True)
+
+    def update_conflicting_files(self):
+        '''
+        Add the path of each file that has a pairwise conflict between HEAD
+        and the remote branches.
+        '''
+        for remote_branch_commit in self.remote_branch_commits:
+            merge_base = self.repo.merge_base(self.head_commit.id, remote_branch_commit.id)
+            index = self.repo.merge_trees(merge_base, self.head_commit.id, remote_branch_commit.id)
+            if index.conflicts:
+                ## Add our file path to conflicting files.
+                self.conflicting_files.update([x[1].path for x in index.conflicts])
+
 if __name__ == "__main__":
-    conflicting_file_paths = find_conflicting_file_paths('C:/Users/Kamal/workspace/deleteme/development/output.txt')
-    
-    print(len(conflicting_file_paths))
-    for path in conflicting_file_paths:
-        print(path)
+    bliss = MergeBliss('.')
+    bliss.update_conflicting_files()
+    if bliss.conflicting_files:
+        for conflicting_file in bliss.conflicting_files:
+            print(conflicting_file)
