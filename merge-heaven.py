@@ -49,8 +49,10 @@ class MergeBliss:
             merge_base = self.repo.merge_base(self.head_commit.id, remote_branch_commit.id)
             index = self.repo.merge_trees(merge_base, self.head_commit.id, remote_branch_commit.id)
             if index.conflicts:
-                ## Add our file path to conflicting files.
-                self.conflicting_files.update([x[1].path for x in index.conflicts])
+                ## Add the original file path of conflicting files. Using ours
+                ## or theirs might result in a None from a deleted file.
+                ## TODO: Make a richer object here!
+                self.conflicting_files.update([x[0].path for x in index.conflicts])
 
 if __name__ == "__main__":
     bliss = MergeBliss('.')
